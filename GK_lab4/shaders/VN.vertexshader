@@ -1,0 +1,181 @@
+#version 330 core
+layout (location = 0) in vec3 aVert;
+layout (location = 1) in vec3 aNorm;
+
+out vec3 FragPos_Diffuse;
+out vec3 Normal_Specular;
+
+// tablica swiatel musi miec staly rozmiar
+#define MAX_LIGHTS 64
+#define SHININESS 64
+#define SPEC_STRENGTH 0.8
+#define LINE 0.07
+#define QUAD 0.017
+#define BLINN_MUL 4
+
+struct sunLight
+{
+	vec3 dir;
+	vec3 color;
+};
+
+struct pntLight
+{
+	vec3 pos;
+	vec3 color;
+};
+
+struct dirLight
+{
+	vec3 pos;
+	vec3 dir;
+	int focus;
+	vec3 color;
+};
+
+uniform mat4 mdel;
+uniform mat4 view;
+uniform mat4 proj;
+uniform mat3 norm; // transpose(inverse(mdel)) i ucieta ostatnia kolumna i wiersz zeby na pozwalac na translacje
+
+uniform sunLight sun;
+uniform int pntSize;
+uniform pntLight pnts[MAX_LIGHTS];
+uniform int dirSize;
+uniform dirLight dirs[MAX_LIGHTS];
+uniform vec3 viewPos;
+
+uniform bool blinnLighting;
+uniform bool gouraudShading;
+
+vec3 calcDiffuseSum(vec3 normVec);
+vec3 calcSpecularSum(vec3 normVec, vec3 viewDir);
+
+void main()
+{
+    gl_Position = proj * view * mdel * vec4(aVert, 1.0);
+	FragPos_Diffuse = vec3(mdel * vec4(aVert, 1.0));
+	Normal_Specular = norm * aNorm;
+
+	if(gouraudShading)
+	{
+		vec3 normVec = normalize(Normal_Specular);
+		vec3 viewDir = normalize(viewPos - FragPos_Diffuse);
+
+		vec3 sumDiffuse = calcDiffuseSum(normVec);
+		vec3 sumSpecular = calcSpecularSum(normVec, viewDir);
+
+		FragPos_Diffuse = sumDiffuse;
+		Normal_Specular = sumSpecular;
+	}
+}
+
+vec3 calcSunDiffuse(sunLight sun, vec3 normVec);
+vec3 calcPntDiffuse(pntLight pnt, vec3 normVec);
+vec3 calcDirDiffuse(dirLight dir, vec3 normVec);
+
+vec3 calcDiffuseSum(vec3 normVec)
+{
+	vec3 diff = vec3(0.0);
+
+	diff += calcSunDiffuse(sun, normVec);
+
+	for(int i = 0; i < pntSize; i++)
+		diff += calcPntDiffuse(pnts[i], normVec);
+
+	for(int i = 0; i < dirSize; i++)
+		diff += calcDirDiffuse(dirs[i], normVec);
+
+	return diff;
+}
+
+vec3 calcSunDiffuse(sunLight sun, vec3 normVec)
+{
+	return max(dot(normVec, -sun.dir), 0.0) * sun.color;
+}
+
+vec3 calcPntDiffuse(pntLight pnt, vec3 normVec)
+{
+	vec3 lightDir = normalize(pnt.pos - FragPos_Diffuse);
+	
+    float dist = length(pnt.pos - FragPos_Diffuse);
+    float attenuation = 1.0 / (1.0 + (LINE + QUAD * dist) * dist); 
+
+	return max(dot(normVec, lightDir), 0.0) * pnt.color * attenuation;
+}
+
+vec3 calcDirDiffuse(dirLight dir, vec3 normVec)
+{
+	vec3 lightDir = normalize(dir.pos - FragPos_Diffuse);
+	float frac = pow(max(dot(dir.dir, -lightDir), 0.0), dir.focus);
+
+	return max(dot(normVec, lightDir), 0.0) * dir.color * frac;
+}
+
+vec3 calcSunSpecular(sunLight sun, vec3 normVec, vec3 viewDir);
+vec3 calcPntSpecular(pntLight pnt, vec3 normVec, vec3 viewDir);
+vec3 calcDirSpecular(dirLight dir, vec3 normVec, vec3 viewDir);
+
+vec3 calcSpecularSum(vec3 normVec, vec3 viewDir)
+{
+	vec3 spec = vec3(0.0);
+
+	spec += calcSunSpecular(sun, normVec, viewDir);
+
+	for(int i = 0; i < pntSize; i++)
+		spec += calcPntSpecular(pnts[i], normVec, viewDir);
+
+	for(int i = 0; i < dirSize; i++)
+		spec += calcDirSpecular(dirs[i], normVec, viewDir);
+
+	return SPEC_STRENGTH * spec;
+}
+
+vec3 calcSunSpecular(sunLight sun, vec3 normVec, vec3 viewDir)
+{
+	if(blinnLighting)
+	{
+		vec3 halfwayDir = normalize(viewDir - sun.dir);
+		return pow(max(dot(normVec, halfwayDir), 0.0), SHININESS * BLINN_MUL) * sun.color;
+	}
+	else
+	{
+		vec3 reflectDir = reflect(sun.dir, normVec);
+		return pow(max(dot(viewDir, reflectDir), 0.0), SHININESS) * sun.color;
+	}
+}
+
+vec3 calcPntSpecular(pntLight pnt, vec3 normVec, vec3 viewDir)
+{
+	vec3 lightDir = normalize(pnt.pos - FragPos_Diffuse);
+    float dist = length(pnt.pos - FragPos_Diffuse);
+    float attenuation = 1.0 / (1.0 + (LINE + QUAD * dist) * dist);
+	
+	if(blinnLighting)
+	{
+		vec3 halfwayDir = normalize(lightDir + viewDir);
+		return pow(max(dot(normVec, halfwayDir), 0.0), SHININESS * BLINN_MUL) * pnt.color * attenuation;
+	}
+	else
+	{
+		vec3 reflectDir = reflect(-lightDir, normVec);
+		return pow(max(dot(viewDir, reflectDir), 0.0), SHININESS) * pnt.color * attenuation;
+	}
+}
+
+vec3 calcDirSpecular(dirLight dir, vec3 normVec, vec3 viewDir)
+{
+	vec3 lightDir = normalize(dir.pos - FragPos_Diffuse);
+	float frac = pow(max(dot(dir.dir, -lightDir), 0.0), dir.focus);
+	
+	if(blinnLighting)
+	{
+		vec3 halfwayDir = normalize(lightDir + viewDir);
+		return pow(max(dot(normVec, halfwayDir), 0.0), SHININESS * BLINN_MUL) * dir.color * frac;
+	}
+	else
+	{
+		vec3 reflectDir = reflect(-lightDir, normVec);
+		return pow(max(dot(viewDir, reflectDir), 0.0), SHININESS) * dir.color * frac;
+	}
+}
